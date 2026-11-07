@@ -8,36 +8,66 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonPrimitive
 
-// If nhentai changes its image hosts, edit these two and rebuild.
-private const val IMAGE_HOST = "https://i.nhentai.net"
-private const val THUMB_HOST = "https://t.nhentai.net"
+// GET /api/v2/config
+@Serializable
+class ConfigDto(
+    @SerialName("image_servers") val imageServers: List<String> = emptyList(),
+    @SerialName("thumb_servers") val thumbServers: List<String> = emptyList(),
+)
 
+// GET /api/v2/tags/{type}/{slug}
+@Serializable
+class TagLookupDto(
+    val id: Int,
+)
+
+// ---------------------------------------------------------------- lists
+
+// A page of works (browse / search / tagged). Entries only carry tag NUMBERS, not names;
+// the full tags are fetched when a work is opened or added to the library.
 @Serializable
 class GalleryListDto(
-    private val result: List<GalleryDto>,
+    private val result: List<GalleryListItemDto>,
     @SerialName("num_pages") private val numPages: Int,
 ) {
-    fun toMangasPage(page: Int) = MangasPage(result.map { it.toSManga() }, page < numPages)
+    fun toMangasPage(page: Int, thumbHost: String) = MangasPage(result.map { it.toSManga(thumbHost) }, page < numPages)
 }
 
-// id and media_id are read as primitives so both numbers and strings are accepted.
+// id is read as a primitive so both numbers and strings are accepted.
+@Serializable
+class GalleryListItemDto(
+    private val id: JsonPrimitive,
+    @SerialName("english_title") private val englishTitle: String? = null,
+    @SerialName("japanese_title") private val japaneseTitle: String? = null,
+    private val thumbnail: String? = null,
+) {
+    fun toSManga(thumbHost: String) = SManga.create().apply {
+        url = id.content
+        title = listOf(englishTitle, japaneseTitle).firstOrNull { !it.isNullOrBlank() } ?: "#${id.content}"
+        thumbnail_url = thumbnail?.let { "$thumbHost/$it" }
+    }
+}
+
+// ---------------------------------------------------------------- one work
+
+// GET /api/v2/galleries/{id}
 @Serializable
 class GalleryDto(
     private val id: JsonPrimitive,
-    @SerialName("media_id") private val mediaId: JsonPrimitive,
     @SerialName("title") private val names: TitleDto,
-    private val images: ImagesDto,
+    private val cover: PathDto? = null,
     private val tags: List<TagDto> = emptyList(),
+    private val pages: List<PathDto> = emptyList(),
     @SerialName("num_pages") private val numPages: Int = 0,
     @SerialName("num_favorites") private val numFavorites: Int = 0,
     @SerialName("upload_date") private val uploadDate: Long = 0L,
 ) {
     private val galleryId get() = id.content
 
-    fun toSManga() = SManga.create().apply {
+    fun toSManga(thumbHost: String) = SManga.create().apply {
         url = galleryId
         title = names.display().ifBlank { "Untitled #$galleryId" }
-        thumbnail_url = "$THUMB_HOST/galleries/${mediaId.content}/cover.${extensionOf(images.cover?.type)}"
+        thumbnail_url = cover?.let { "$thumbHost/${it.path}" }
 
         val artists = namesOf("artist")
         val groups = namesOf("group")
@@ -47,7 +77,7 @@ class GalleryDto(
         genre = genres().joinToString().ifEmpty { null }
         description = buildString {
             append("#").append(galleryId)
-            append("\nPages: ").append(numPages)
+            append("\nPages: ").append(if (pages.isNotEmpty()) pages.size else numPages)
             append("\nFavorites: ").append(numFavorites)
             names.english?.takeIf { it.isNotBlank() }?.let { append("\nEnglish: ").append(it) }
             names.japanese?.takeIf { it.isNotBlank() }?.let { append("\nJapanese: ").append(it) }
@@ -63,11 +93,10 @@ class GalleryDto(
         date_upload = uploadDate * 1000L
     }
 
-    fun toPageList(): List<Page> {
-        val media = mediaId.content
-        return images.pages.mapIndexed { index, image ->
-            Page(index, imageUrl = "$IMAGE_HOST/galleries/$media/${index + 1}.${extensionOf(image.type)}")
-        }
+    // Image paths come ready-made from the API (e.g. "galleries/4298545/1.webp");
+    // the image servers rotate between the hosts listed in /api/v2/config.
+    fun toPageList(imageHosts: List<String>): List<Page> = pages.mapIndexed { index, page ->
+        Page(index, imageUrl = "${imageHosts[index % imageHosts.size]}/${page.path}")
     }
 
     private fun namesOf(type: String) = tags
@@ -87,14 +116,6 @@ class GalleryDto(
             }
         }
         .distinct()
-
-    private fun extensionOf(type: String?) = when (type) {
-        "p" -> "png"
-        "g" -> "gif"
-        "w" -> "webp"
-        "a" -> "avif"
-        else -> "jpg"
-    }
 }
 
 @Serializable
@@ -107,14 +128,8 @@ class TitleDto(
 }
 
 @Serializable
-class ImagesDto(
-    val pages: List<ImageDto> = emptyList(),
-    val cover: ImageDto? = null,
-)
-
-@Serializable
-class ImageDto(
-    @SerialName("t") val type: String = "j",
+class PathDto(
+    val path: String,
 )
 
 @Serializable

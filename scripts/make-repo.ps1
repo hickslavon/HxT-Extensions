@@ -49,7 +49,7 @@ foreach ($apk in $apks) {
     $label = $pkg
     if ($text -match "application-label:'([^']*)'") { $label = $Matches[1] }
 
-    $nsfw = 0
+    $nsfw = 1
     if ($text -match "name='tachiyomi\.extension\.nsfw' value='(\d)'") { $nsfw = [int]$Matches[1] }
 
     $lang = ($pkg.Split('.'))[4]
