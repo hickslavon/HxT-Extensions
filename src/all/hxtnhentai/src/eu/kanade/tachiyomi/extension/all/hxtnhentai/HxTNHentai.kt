@@ -28,7 +28,7 @@ import kotlin.time.Duration.Companion.seconds
  * work directly. The bulk importer relies on this.
  *
  * ALL web addresses used by this file are listed in the Api object at the bottom.
- * Entries marked UNVERIFIED are best guesses and may need correcting.
+ * Everything in there was copied from requests seen in the browser.
  */
 @Source
 abstract class HxTNHentai : KeiSource() {
@@ -60,17 +60,17 @@ abstract class HxTNHentai : KeiSource() {
 
     // ------------------------------------------------------------ Browse
 
-    override suspend fun getPopularManga(page: Int): MangasPage = browse(page, SORT_VALUES[0])
-
-    override suspend fun getLatestUpdates(page: Int): MangasPage = browse(page, "date")
-
-    private suspend fun browse(page: Int, sort: String): MangasPage {
+    // Latest = the site's "New Uploads" list
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
         val url = "$baseUrl${Api.LIST}".toHttpUrl().newBuilder()
-            .addQueryParameter("sort", sort)
             .addQueryParameter("page", page.toString())
             .build()
         return client.get(url, Fetch.XHR).parseAs<GalleryListDto>().toMangasPage(page, thumbHost())
     }
+
+    // Popular = all-time popular works, using the search with a query that matches everything
+    // (the site's own "Popular Now" list only holds a handful of works and cannot be paged)
+    override suspend fun getPopularManga(page: Int): MangasPage = search(MATCH_ALL, "popular", page)
 
     // ------------------------------------------------------------ Search
 
@@ -104,7 +104,7 @@ abstract class HxTNHentai : KeiSource() {
             return client.get(url, Fetch.XHR).parseAs<GalleryListDto>().toMangasPage(page, thumbHost())
         }
 
-        // Everything else: text search (UNVERIFIED address)
+        // Everything else: text search
         val parts = mutableListOf<String>()
         if (trimmed.isNotEmpty()) parts += trimmed
         if (language != null) parts += "language:$language"
@@ -116,8 +116,13 @@ abstract class HxTNHentai : KeiSource() {
             }
         }
 
+        return search(parts.joinToString(" ").ifBlank { MATCH_ALL }, sort, page)
+    }
+
+    // GET /api/v2/search?query=..&sort=..&page=..
+    private suspend fun search(query: String, sort: String, page: Int): MangasPage {
         val url = "$baseUrl${Api.SEARCH}".toHttpUrl().newBuilder()
-            .addQueryParameter("query", parts.joinToString(" ").ifBlank { "pages:>0" })
+            .addQueryParameter("query", query)
             .addQueryParameter("sort", sort)
             .addQueryParameter("page", page.toString())
             .build()
@@ -188,12 +193,14 @@ abstract class HxTNHentai : KeiSource() {
         const val GALLERY = "/api/v2/galleries/" // + id   (?include=related,suggestions,comments is optional)
         const val TAG_LOOKUP = "/api/v2/tags/" // + type + "/" + slug
 
-        // Query parts verified (tag_id, sort=date, page); the path before "tagged" is my best guess:
+        // Verified: /api/v2/galleries/tagged?tag_id=..&sort=date|popular-today|popular-week|popular&page=..
         const val TAGGED = "/api/v2/galleries/tagged"
 
-        // UNVERIFIED guesses, to be replaced with the real addresses:
-        const val LIST = "/api/v2/galleries" // home / popular / latest list
-        const val SEARCH = "/api/v2/search" // text search
+        // Verified: /api/v2/galleries?page=..  (the "New Uploads" list)
+        const val LIST = "/api/v2/galleries"
+
+        // Verified: /api/v2/search?query=..&sort=date|popular-today|popular-week|popular&page=..
+        const val SEARCH = "/api/v2/search"
 
         // Used if /api/v2/config cannot be read:
         const val DEFAULT_THUMB_HOST = "https://t1.nhentai.net"
@@ -206,19 +213,21 @@ abstract class HxTNHentai : KeiSource() {
     }
 
     companion object {
+        // A search that matches every work (used for the all-time Popular tab). If the site rejects
+        // it, this is the one place to change.
+        private const val MATCH_ALL = "pages:>0"
+
         private val ID_REGEX = Regex("""^(?:id:|#)?(\d{1,8})$""")
         private val LINK_ID_REGEX = Regex("""^/g/(\d+)""")
 
+        // Verified sort values (same names the website uses). The first entry is the default.
         private val SORT_LABELS = arrayOf(
-            "Popular: all time",
-            "Popular: this month",
-            "Popular: this week",
-            "Popular: today",
             "Recent",
+            "Popular: today",
+            "Popular: this week",
+            "Popular: all time",
         )
-
-        // "date" is verified; the popular values are guesses
-        private val SORT_VALUES = arrayOf("popular", "popular-month", "popular-week", "popular-today", "date")
+        private val SORT_VALUES = arrayOf("date", "popular-today", "popular-week", "popular")
 
         private val LANGUAGE_LABELS = arrayOf("Any", "English", "Japanese", "Chinese")
         private val LANGUAGE_VALUES = arrayOf("", "english", "japanese", "chinese")
