@@ -76,7 +76,11 @@ abstract class HxTHitomi : KeiSource() {
 
         // The search box: words = title words, "namespace:value" = a tag-like term, "-" in front = exclude.
         // Only the known namespaces count; anything else (e.g. "Re:Zero") is treated as title words.
-        trimmed.split(Regex("""\s+""")).filter { it.isNotEmpty() }.forEach { token ->
+        // Text in [] () {} (circle, artist, language, translator group...) is not part of hitomi's titles,
+        // so it is dropped from the words; if that leaves nothing, the full text is used.
+        val withoutBrackets = trimmed.replace(BRACKETS_REGEX, " ").trim()
+        val searchText = if (withoutBrackets.any { it.isLetterOrDigit() }) withoutBrackets else trimmed
+        searchText.split(Regex("""\s+""")).filter { it.isNotEmpty() }.forEach { token ->
             val exclude = token.startsWith("-") && token.length > 1
             val text = token.removePrefix("-").replace('_', ' ').lowercase()
             val colon = text.indexOf(':')
@@ -167,9 +171,11 @@ abstract class HxTHitomi : KeiSource() {
         }
         // Words the index does not know (typos, odd spellings) are ignored; if none are known, nothing matches.
         var knownWords = 0
-        for (word in titleWords) {
+        val wordLists = mutableListOf<IntArray>()
+        for (word in titleWords.distinctBy { it.value }) {
             val list = searchTitleWord(word.value) ?: continue
             knownWords++
+            wordLists += list
             if (base == null) base = list.sortedArrayDescending() else sets += list.sortedArray()
         }
         if (titleWords.isNotEmpty() && knownWords == 0) return emptyList()
@@ -188,10 +194,28 @@ abstract class HxTHitomi : KeiSource() {
             }
         }
 
-        return base!!.filter { id ->
+        val accept = { id: Int ->
             sets.all { java.util.Arrays.binarySearch(it, id) >= 0 } &&
                 removed.none { java.util.Arrays.binarySearch(it, id) >= 0 }
         }
+        val exact = base!!.filter(accept)
+
+        // Nothing contains every word (a translated title, an odd spelling...): offer the works that
+        // contain the most of them, as long as that is at least half. This is what lets migration find matches.
+        if (exact.isEmpty() && sort.isEmpty() && tagLike.isEmpty() && knownWords >= 2) {
+            return partialMatches(wordLists, accept)
+        }
+        return exact
+    }
+
+    private fun partialMatches(lists: List<IntArray>, accept: (Int) -> Boolean): List<Int> {
+        val useful = lists.filter { it.size <= 150_000 } // very common words say nothing
+        if (useful.size < 2) return emptyList()
+        val counts = HashMap<Int, Int>()
+        for (list in useful) for (id in list) counts[id] = (counts[id] ?: 0) + 1
+        val best = counts.values.maxOrNull() ?: return emptyList()
+        if (best * 2 < useful.size) return emptyList()
+        return counts.filter { it.value == best && accept(it.key) }.keys.sortedDescending().take(100)
     }
 
     private enum class Kind { TITLE, NAMESPACED, PLAIN_TAG }
@@ -303,6 +327,16 @@ abstract class HxTHitomi : KeiSource() {
             title = doc.selectFirst("h1.lillie a")?.text()?.takeIf { it.isNotBlank() } ?: "#$id"
             thumbnail_url = doc.selectFirst(".dj-img1 img")?.attr("data-src")?.takeIf { it.isNotBlank() }
                 ?.let { if (it.startsWith("//")) "https:$it" else it }
+
+            // Language and artist are on the card; they let the app's migration pick the right language.
+            val language = doc.selectFirst("a[href^=/index-]")?.attr("href")
+                ?.removePrefix("/index-")?.removeSuffix(".html")?.takeIf { it.isNotBlank() }
+            val artists = doc.select(".artist-list a").map { it.text().trim() }.filter { it.isNotEmpty() }
+            artist = artists.joinToString().ifEmpty { null }
+            genre = buildList {
+                language?.let { add("language: $it") }
+                artists.forEach { add("artist: $it") }
+            }.joinToString().ifEmpty { null }
         }
     }
 
@@ -553,6 +587,8 @@ abstract class HxTHitomi : KeiSource() {
 
     companion object {
         private const val PAGE_SIZE = 25
+
+        private val BRACKETS_REGEX = Regex("""\[[^\]]*]|\([^)]*\)|\{[^}]*}""")
 
         private val KNOWN_NAMESPACES = setOf(
             "female", "male", "tag", "artist", "group", "series", "parody", "character", "type", "category", "language",
