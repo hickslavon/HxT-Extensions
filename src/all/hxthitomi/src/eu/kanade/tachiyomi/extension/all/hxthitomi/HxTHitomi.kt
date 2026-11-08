@@ -74,26 +74,26 @@ abstract class HxTHitomi : KeiSource() {
         val includes = mutableListOf<Term>()
         val excludes = mutableListOf<Term>()
 
-        // The search box: words = title words, "namespace:value" = a tag-like term, "-" in front = exclude
+        // The search box: words = title words, "namespace:value" = a tag-like term, "-" in front = exclude.
+        // Only the known namespaces count; anything else (e.g. "Re:Zero") is treated as title words.
         trimmed.split(Regex("""\s+""")).filter { it.isNotEmpty() }.forEach { token ->
             val exclude = token.startsWith("-") && token.length > 1
             val text = token.removePrefix("-").replace('_', ' ').lowercase()
             val colon = text.indexOf(':')
-            val term = if (colon > 0) {
-                val ns = text.substring(0, colon)
-                val value = text.substring(colon + 1)
+            val ns = if (colon > 0) text.substring(0, colon) else null
+            val value = if (colon > 0) text.substring(colon + 1) else text
+            if (ns != null && ns in KNOWN_NAMESPACES) {
                 if (ns == "language" && !exclude) {
                     language = value
-                    null
-                } else if (value.isEmpty()) {
-                    null
-                } else {
-                    Term(Kind.NAMESPACED, ns, value)
+                } else if (value.isNotEmpty()) {
+                    (if (exclude) excludes else includes).add(Term(Kind.NAMESPACED, ns, value))
                 }
             } else {
-                Term(Kind.TITLE, "", text)
+                // Title words: punctuation splits words, so "Mother-in-law!" becomes mother, in, law
+                text.split(Regex("""[^\p{L}\p{N}]+""")).filter { it.isNotEmpty() }.forEach { word ->
+                    (if (exclude) excludes else includes).add(Term(Kind.TITLE, "", word))
+                }
             }
-            if (term != null) (if (exclude) excludes else includes).add(term)
         }
 
         // The filters: comma separated entries, "-" in front = exclude
@@ -165,10 +165,14 @@ abstract class HxTHitomi : KeiSource() {
             val list = fetchNozomi(termSegments(term, language), null).ids
             if (base == null) base = list else sets += list.sortedArray()
         }
+        // Words the index does not know (typos, odd spellings) are ignored; if none are known, nothing matches.
+        var knownWords = 0
         for (word in titleWords) {
-            val list = searchTitleWord(word.value)
+            val list = searchTitleWord(word.value) ?: continue
+            knownWords++
             if (base == null) base = list.sortedArrayDescending() else sets += list.sortedArray()
         }
+        if (titleWords.isNotEmpty() && knownWords == 0) return emptyList()
         if (base == null) {
             base = fetchNozomi(listOf(Api.indexName(language)), null).ids
         } else if (sort.isEmpty() && tagLike.isEmpty() && language != "all") {
@@ -178,7 +182,7 @@ abstract class HxTHitomi : KeiSource() {
 
         val removed = excludes.map { term ->
             if (term.kind == Kind.TITLE) {
-                searchTitleWord(term.value).sortedArray()
+                (searchTitleWord(term.value) ?: IntArray(0)).sortedArray()
             } else {
                 fetchNozomi(termSegments(term, "all"), null).ids.sortedArray()
             }
@@ -351,10 +355,10 @@ abstract class HxTHitomi : KeiSource() {
         return 0
     }
 
-    /** Every work number whose title contains this word. */
-    private suspend fun searchTitleWord(word: String): IntArray {
+    /** Every work number whose title contains this word, or null if the index has no such word. */
+    private suspend fun searchTitleWord(word: String): IntArray? {
         val clean = word.replace("/", "").replace("#", "").lowercase()
-        if (clean.isEmpty()) return IntArray(0)
+        if (clean.isEmpty()) return null
         val key = MessageDigest.getInstance("SHA-256").digest(clean.toByteArray(Charsets.UTF_8)).copyOfRange(0, 4)
         val version = galleriesIndexVersion()
         val indexUrl = "${Api.LTN}/galleriesindex/galleries.$version.index"
@@ -380,13 +384,13 @@ abstract class HxTHitomi : KeiSource() {
             if (next == 0L) break
             address = next
         }
-        val (offset, length) = found ?: return IntArray(0)
-        if (length <= 0 || length > 100_000_000) return IntArray(0)
+        val (offset, length) = found ?: return null
+        if (length <= 0 || length > 100_000_000) return null
 
         val data = fetchRange("${Api.LTN}/galleriesindex/galleries.$version.data", offset, offset + length - 1)
         val buffer = ByteBuffer.wrap(data)
         val count = buffer.getInt()
-        if (count <= 0 || data.size != count * 4 + 4) return IntArray(0)
+        if (count <= 0 || data.size != count * 4 + 4) return null
         return IntArray(count) { buffer.getInt() }
     }
 
@@ -549,6 +553,10 @@ abstract class HxTHitomi : KeiSource() {
 
     companion object {
         private const val PAGE_SIZE = 25
+
+        private val KNOWN_NAMESPACES = setOf(
+            "female", "male", "tag", "artist", "group", "series", "parody", "character", "type", "category", "language",
+        )
 
         private val ID_REGEX = Regex("""^(?:id:|#)?(\d{1,9})$""")
         private val LINK_ID_REGEX = Regex("""(\d+)\.html$""")
