@@ -31,8 +31,9 @@ rootProject.name = "HxT-Extensions"
 /**
  * Add or remove modules to load as needed for local development here.
  */
-// Only our own sources are loaded. Add new ones here, e.g. loadIndividualExtension("all", "hxthitomi")
+// Only our own sources are loaded. Add new ones here, like the two below.
 loadIndividualExtension("all", "hxtnhentai")
+loadIndividualExtension("all", "hxthitomi")
 
 /**
  * ===================================== COMMON CONFIGURATION ======================================

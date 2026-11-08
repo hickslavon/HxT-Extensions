@@ -28,7 +28,7 @@ if (-not $aapt2) {
 $apks = Get-ChildItem -Path (Join-Path $root "src") -Recurse -Filter "*.apk" |
     Where-Object { $_.FullName -match "\\build\\outputs\\apk\\$BuildType\\" }
 if (-not $apks) {
-    throw "No $BuildType APKs found. Build first: .\gradlew.bat :src:all:hxtnhentai:assemble$((Get-Culture).TextInfo.ToTitleCase($BuildType))"
+    throw "No $BuildType APKs found. Build first: .\gradlew.bat :src:all:hxtnhentai:assembleDebug :src:all:hxthitomi:assembleDebug"
 }
 
 # ---- fresh repo folder ----
